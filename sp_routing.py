@@ -50,7 +50,8 @@ class SPRouter(app_manager.RyuApp):
         self.topo_net = topo.Fattree(4)
         self.host_map = {} # dpid, port and mac key-value pairs
         self.dp_map = {} #the datapaths and switches stored here dpid - datapath obj mapping
-
+        self.dp_connectivity_map = {} #stores the out_port for every dpid to dpid connection 
+        # format for dp_connectivity_map : [src_dpid][dst_dpid] = out_port
 
 
     # Topology discovery
@@ -60,6 +61,28 @@ class SPRouter(app_manager.RyuApp):
         # Switches and links in the network
         switches = get_switch(self, None)
         links = get_link(self, None)
+
+        # self.logger.info(f"Switches data structure is: {switches} with length {len(switches)}")
+        # self.logger.info(f"Switch object data structure is: {vars(switches[0])} with dp {vars(switches[0].dp)}")
+        
+        for switch in switches:
+            self.dp_connectivity_map.setdefault(switch.dp.id, {}) #initialize empty dict for every dpid
+
+        # self.logger.info(f"Links data structure is: {links} with length {len(links)}")
+        # [self.logger.info(f"Link: Switch {l.src.dpid} [Port {l.src.port_no}] >> Switch {l.dst.dpid} [Port {l.dst.port_no}]") for l in links]
+
+        # the loop parses the get_links() output and populates the dp_connectivity map initialized above
+        for link in links:
+            src_dpid = link.src.dpid
+            dst_dpid = link.dst.dpid
+            out_port = link.src.port_no
+            
+            try:
+                self.dp_connectivity_map[src_dpid][dst_dpid] = out_port
+            except Exception as e:
+                self.logger.info(f"error occured while adding links with error {e}")
+
+            
 
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -88,6 +111,37 @@ class SPRouter(app_manager.RyuApp):
                                 match=match, instructions=inst)
         datapath.send_msg(mod)
 
+    # This function implements the Dijkstra's Shortest path algorithm
+    def get_shortest_path(self, src_dpid, dst_dpid):
+        distances = {map: float('inf') for map in self.dp_connectivity_map} #initialize distances dict with map's distance as inifinity by default
+        distances[src_dpid] = 0 #initialize 0 for the source itself
+        previous = {map: None for map in self.dp_connectivity_map}
+        unvisited_nodes = set(self.dp_connectivity_map.keys())
+
+        while unvisited_nodes:
+            current_node = min(unvisited_nodes, key=lambda map: distances[map]) # finds the lowest distance from distances
+            if distances[current_node] == float('inf') or current_node == dst_dpid:
+                # handles infinity, deadends or destination and source match
+                break
+            unvisited_nodes.remove(current_node)
+
+            for immediate_neighbor_node in self.dp_connectivity_map[current_node]:
+                new_distance = distances[current_node] + 1 #treating every hop by 1 weight
+                if new_distance < distances[immediate_neighbor_node]:
+                    distances[immediate_neighbor_node] = new_distance #overwrite with lower distance
+                    previous[immediate_neighbor_node] = current_node
+
+        #backward path tracing here    
+        shortest_path = []
+        current_node = dst_dpid 
+        while current_node is not None:
+            shortest_path.append(current_node)
+            current_node = previous[current_node]
+        
+        shortest_path.reverse() #reversing the backward path tracing to reveal the actual shortest path
+
+        return shortest_path
+
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -104,8 +158,10 @@ class SPRouter(app_manager.RyuApp):
         src_mac = eth_proto.src
 
 
-        #log/test area
-        self.logger.info(f"dp_map dictionary's current state: {self.dp_map}")
+        ######  log/test area
+        # self.logger.info(f"dp_map dictionary's current state: {self.dp_map}")
+        # self.logger.info(f"dp_connectivity_map dictionary's current state: {self.dp_connectivity_map}")
+
 
         #getting rid of ipv6 packet noise
         if eth_proto.ethertype == ETH_TYPE_IPV6:
@@ -172,7 +228,41 @@ class SPRouter(app_manager.RyuApp):
                     self.logger.info(f"IP response sent and flow rule added for destination {dst_ip}")
                
                 else: # hosts won't be in either the same switch or pod, passing down to dikstra's
-                    return
+                    shortest_path = self.get_shortest_path(dpid, dst_dpid)
+                    self.logger.info(f"Dijkstra's Algorithm Triggered, shortest path is {shortest_path}")
+                    if shortest_path:
+                        for i in range(len(shortest_path)):
+                            switch_dpid = shortest_path[i]
+                            node_datapath = self.dp_map[switch_dpid]
+                            if switch_dpid == dst_dpid:
+                                out_port = self.host_map[dst_ip]['port']
+                            else:
+                                next_switch_dpid = shortest_path[i+1]
+                                out_port = self.dp_connectivity_map[switch_dpid][next_switch_dpid] #find out the out_port for intermdiate hops between shortest path switch list
+                            
+                            #add flow rule
+                            match = parser.OFPMatch(eth_type=ETH_TYPE_IP, ipv4_dst=dst_ip)
+                            actions = [parser.OFPActionOutput(out_port)]
+                            self.add_flow(node_datapath, 10, match, actions)
+                            self.logger.info(f"Flow rule added for shortest path datapath id {switch_dpid}")
+
+                        #handle the first dropped packet
+                        if len(shortest_path) > 1:
+                            first_hop_dpid = shortest_path[1]
+                            out_port = self.dp_connectivity_map[dpid][first_hop_dpid]
+                        
+                        else:
+                            out_port = self.host_map[dst_ip]['port']
+                        
+                        actions = [parser.OFPActionOutput(out_port)]
+                        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+                            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id, in_port=in_port, actions=actions)
+                        else:
+                            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id, in_port=in_port, actions=actions, data=msg.data)
+
+                        datapath.send_msg(out)
+                        self.logger.info(f"initial packet forwarded out from {dpid} via port{out_port}")
+
 
             else:
                 self.logger.info(f"IP reply not sent, can't find {dst_ip} in dictionary")
