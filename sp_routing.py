@@ -52,6 +52,7 @@ class SPRouter(app_manager.RyuApp):
         self.dp_map = {} #the datapaths and switches stored here dpid - datapath obj mapping
         self.dp_connectivity_map = {} #stores the out_port for every dpid to dpid connection 
         # format for dp_connectivity_map : [src_dpid][dst_dpid] = out_port
+        self.switch_portmap = {} #stores port mapping of every switch: dpid = [ports]
 
 
     # Topology discovery
@@ -67,7 +68,9 @@ class SPRouter(app_manager.RyuApp):
         
         for switch in switches:
             self.dp_connectivity_map.setdefault(switch.dp.id, {}) #initialize empty dict for every dpid
-
+            self.switch_portmap[switch.dp.id] = [
+                port.port_no for port in switch.ports if port.port_no != 0xfffffffe # here 0xfffffffe is value of ofproto.OFPP_LOCAL- to filter it out
+            ]
         # self.logger.info(f"Links data structure is: {links} with length {len(links)}")
         # [self.logger.info(f"Link: Switch {l.src.dpid} [Port {l.src.port_no}] >> Switch {l.dst.dpid} [Port {l.dst.port_no}]") for l in links]
 
@@ -160,6 +163,7 @@ class SPRouter(app_manager.RyuApp):
 
         ######  log/test area
         # self.logger.info(f"dp_map dictionary's current state: {self.dp_map}")
+        # self.logger.info(f"switch_portmap dictionary's current state: {self.switch_portmap}")
         # self.logger.info(f"dp_connectivity_map dictionary's current state: {self.dp_connectivity_map}")
 
 
@@ -204,7 +208,22 @@ class SPRouter(app_manager.RyuApp):
                 self.logger.info(f"ARP reply sent to {src_ip} proxied as {dst_ip} has mac {dst_mac}")
             
             else:
-                self.logger.info(f"ARP reply not sent.. can't find {dst_ip} in dictionary")
+                self.logger.info(f"can't find {dst_ip} in dictionary, arp forwarding from all edge ports - targetted pseudoflooding")
+                pseudoflood_counter = 0
+                for switch_dpid, switch_object in self.dp_map.items():
+                    if switch_dpid not in self.switch_portmap:
+                        continue
+                    # logic - subtracting switch-to-switch port from exhaustive list of ports to find out host ports in all switches
+                    dp_link_ports = self.dp_connectivity_map[switch_dpid].values()
+                    dp_host_ports = [p for p in self.switch_portmap[switch_dpid] if p not in dp_link_ports]
+
+                    for host_port in dp_host_ports:
+                        actions = [switch_object.ofproto_parser.OFPActionOutput(host_port)]
+                        out = switch_object.ofproto_parser.OFPPacketOut(datapath=switch_object, buffer_id=ofproto.OFP_NO_BUFFER, in_port=switch_object.ofproto.OFPP_CONTROLLER, actions=actions, data=msg.data)
+                        switch_object.send_msg(out)
+                        pseudoflood_counter += 1
+                self.logger.info(f"arp sent to {pseudoflood_counter} ports for unknown dst")
+
         
         elif ipv4.ipv4 in [type(x) for x in data_packet.protocols]:
             self.logger.info("IPV4 Packet received..")
