@@ -85,14 +85,14 @@ class Fattree:
 
 			for switch in range(half_k,k):
 				# the nomenclature below is implemented also to solve the multiple request issue faced at ryu when s1, a1 or e1 was implemented earlier with errors
-				agg_switch = Node(id = f"a10{pod:03d}{switch:03d}001", type="aggregation_switch") #nomenclature adherering to al-fares' paper stripped of special characters
+				agg_switch = Node(id = f"a{pod:03d}{switch:03d}001", type="aggregation_switch") #nomenclature adherering to al-fares' paper stripped of special characters
 				agg_switch.ip_address = f"10.{pod}.{switch}.1"
 				self.switches.append(agg_switch)
 				agg_switches[(pod, switch)] = agg_switch
 				mapper_pod_agg.append(agg_switch)
 			
 			for switch in range(half_k):
-				edge_switch = Node(id = f"e10{pod:03d}{switch:03d}001", type="edge_switch")
+				edge_switch = Node(id = f"e{pod:03d}{switch:03d}001", type="edge_switch")
 				edge_switch.ip_address = f"10.{pod}.{switch}.1"
 				self.switches.append(edge_switch)
 				mapper_pod_edge.append(edge_switch)
@@ -112,7 +112,7 @@ class Fattree:
 		#Instantiate core switches as per the paper
 		for j in range(1,half_k+1):
 			for i in range(1, half_k+1):
-				core_switch = Node(id = f"s10{k:03d}{j:03d}{i:03d}", type="core_switch")
+				core_switch = Node(id = f"s{k:03d}{j:03d}{i:03d}", type="core_switch")
 				core_switch.ip_address = f"10.{k}.{j}.{i}"
 
 				core_switches[(j,i)] = core_switch
