@@ -174,14 +174,14 @@ class SPRouter(app_manager.RyuApp):
         if eth_proto.ethertype == ETH_TYPE_LLDP:
             return
 
-        self.logger.info(f"message received {msg}")
-        self.logger.info(f"Hostmap dictionary state: {self.host_map}")
+        # self.logger.info(f"message received {msg}")
+        # self.logger.info(f"Hostmap dictionary state: {self.host_map}")
 
         if arp.arp in [type(x) for x in data_packet.protocols]:
-            self.logger.info("ARP packet received.")
             arp_proto = data_packet.get_protocols(arp.arp)[0]
             src_ip = arp_proto.src_ip
             dst_ip = arp_proto.dst_ip
+            self.logger.info(f"ARP packet received from {src_ip} to {dst_ip}.")
             self.host_map[src_ip] = {'dpid': dpid, 'port': in_port, 'mac': src_mac}
 
             if arp_proto.opcode == arp.ARP_REQUEST:
@@ -303,5 +303,3 @@ class SPRouter(app_manager.RyuApp):
         else:
             self.logger.info("ignoring non-ipv4 or arp requests ...")
             return
-
-        
