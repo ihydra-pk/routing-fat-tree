@@ -138,6 +138,9 @@ class FTRouter(app_manager.RyuApp):
                     sorted_neighbors = sorted(self.dp_connectivity_map[dpid].keys())
                     #filter the relevant core ports from sorted ports
                     core_ports = [self.dp_connectivity_map[dpid][neighbor_dpid] for neighbor_dpid in sorted_neighbors if neighbor_dpid in self.core_switches]
+                    if not core_ports:
+                        continue #handle division by zero until fully mapped
+
 
                     for host_id in range(2, self.half_k + 2):
                         port_index = (host_id - 2 + switch_index) % self.half_k # formula from the paper for entropy
@@ -158,7 +161,8 @@ class FTRouter(app_manager.RyuApp):
                 sorted_neighbors = sorted(self.dp_connectivity_map[dpid].keys())
                 #filter the relevant agg ports from sorted ports
                 agg_ports = [self.dp_connectivity_map[dpid][neighbor_dpid] for neighbor_dpid in sorted_neighbors if neighbor_dpid in self.aggregation_switches]
-
+                if not agg_ports:
+                    continue #handle division by zero until fully mapped
                 # host_suffix = 2 # in fat tree implementation, host ips start ending in .2 to k/2+1
                 for host_id in range(2, self.half_k + 2):
                     port_index = (host_id - 2 + switch_index) % self.half_k
