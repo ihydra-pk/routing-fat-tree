@@ -1,0 +1,11 @@
+controller,scenario,pair,rtt_ms,throughput_mbps
+sp_routing.py,intra_edge,h1-h2,47.487,13.4
+sp_routing.py,intra_pod,h1-h3,79.242,13.4
+sp_routing.py,inter_pod,h1-h9,98.707,13.3
+sp_routing.py,many_to_one,*-h1,,13.124729000000002
+sp_routing.py,many_to_many,8_flows,,27.549819000000003
+ft_routing.py,intra_edge,h1-h2,74.582,13.4
+ft_routing.py,intra_pod,h1-h3,83.825,13.4
+ft_routing.py,inter_pod,h1-h9,92.113,13.3
+ft_routing.py,many_to_one,*-h1,,13.823722
+ft_routing.py,many_to_many,8_flows,,104.50457300000001
