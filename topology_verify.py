@@ -9,8 +9,9 @@ import matplotlib.patches as mpatches
 
 
 def run_sanity_check(k):
-    if k % 2 != 0:
-        raise ValueError(f"Invalid k={k}: Fat-Tree topology requires an even k value.")
+    if k < 4 or k % 2 != 0:
+        raise ValueError(
+        f"Invalid k={k}: Fat-Tree topology requires an even k value greater than or equal to 4.")
     
     print(f"Running sanity check for k={k}...")
 
