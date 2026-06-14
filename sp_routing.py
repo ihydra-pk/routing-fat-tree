@@ -184,45 +184,58 @@ class SPRouter(app_manager.RyuApp):
             dst_ip = arp_proto.dst_ip
             self.host_map[src_ip] = {'dpid': dpid, 'port': in_port, 'mac': src_mac}
 
-            #arp request handling if present
-            if dst_ip in self.host_map:
-                dst_mac = self.host_map[dst_ip]['mac']
+            if arp_proto.opcode == arp.ARP_REQUEST:
+                #arp request handling if present
+                if dst_ip in self.host_map:
+                    dst_mac = self.host_map[dst_ip]['mac']
 
-                #build response
-                response_packet = packet.Packet()
+                    #build response
+                    response_packet = packet.Packet()
 
-                eth_proto_response = ethernet.ethernet(dst=src_mac,src=dst_mac, ethertype=ETH_TYPE_ARP)
-                arp_proto_response = arp.arp(opcode=arp.ARP_REPLY, src_mac=dst_mac,src_ip=dst_ip, dst_mac=src_mac, dst_ip=src_ip)
-                response_packet.add_protocol(eth_proto_response)
-                response_packet.add_protocol(arp_proto_response)
-                #conversion to binary
-                response_packet.serialize()
+                    eth_proto_response = ethernet.ethernet(dst=src_mac,src=dst_mac, ethertype=ETH_TYPE_ARP)
+                    arp_proto_response = arp.arp(opcode=arp.ARP_REPLY, src_mac=dst_mac,src_ip=dst_ip, dst_mac=src_mac, dst_ip=src_ip)
+                    response_packet.add_protocol(eth_proto_response)
+                    response_packet.add_protocol(arp_proto_response)
+                    #conversion to binary
+                    response_packet.serialize()
 
-                #define actions
-                # out_port = ofproto.OFPP_IN_PORT
-                out_port = in_port
-                actions = [parser.OFPActionOutput(out_port)]
-                #send final response
-                self.logger.info(f"Sending ARP response... with these actions: {actions}")
-                datapath.send_msg(parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER, in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=response_packet.data))
-                self.logger.info(f"ARP reply sent to {src_ip} proxied as {dst_ip} has mac {dst_mac}")
+                    #define actions
+                    # out_port = ofproto.OFPP_IN_PORT
+                    out_port = in_port
+                    actions = [parser.OFPActionOutput(out_port)]
+                    #send final response
+                    self.logger.info(f"Sending ARP response... with these actions: {actions}")
+                    datapath.send_msg(parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER, in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=response_packet.data))
+                    self.logger.info(f"ARP reply sent to {src_ip} proxied as {dst_ip} has mac {dst_mac}")
+                
+                else:
+                    self.logger.info(f"can't find {dst_ip} in dictionary, arp forwarding from all edge ports - targetted pseudoflooding")
+                    pseudoflood_counter = 0
+                    for switch_dpid, switch_object in self.dp_map.items():
+                        if switch_dpid not in self.switch_portmap:
+                            continue
+                        # logic - subtracting switch-to-switch port from exhaustive list of ports to find out host ports in all switches
+                        dp_link_ports = self.dp_connectivity_map[switch_dpid].values()
+                        dp_host_ports = [p for p in self.switch_portmap[switch_dpid] if p not in dp_link_ports]
+
+                        for host_port in dp_host_ports:
+                            actions = [switch_object.ofproto_parser.OFPActionOutput(host_port)]
+                            out = switch_object.ofproto_parser.OFPPacketOut(datapath=switch_object, buffer_id=ofproto.OFP_NO_BUFFER, in_port=switch_object.ofproto.OFPP_CONTROLLER, actions=actions, data=msg.data)
+                            switch_object.send_msg(out)
+                            pseudoflood_counter += 1
+                            self.logger.info(f"[ARP REQ] === FROM SWITCH {switch_dpid} PORT {host_port}")
+                    self.logger.info(f"arp sent to {pseudoflood_counter} ports for unknown dst")
             
-            else:
-                self.logger.info(f"can't find {dst_ip} in dictionary, arp forwarding from all edge ports - targetted pseudoflooding")
-                pseudoflood_counter = 0
-                for switch_dpid, switch_object in self.dp_map.items():
-                    if switch_dpid not in self.switch_portmap:
-                        continue
-                    # logic - subtracting switch-to-switch port from exhaustive list of ports to find out host ports in all switches
-                    dp_link_ports = self.dp_connectivity_map[switch_dpid].values()
-                    dp_host_ports = [p for p in self.switch_portmap[switch_dpid] if p not in dp_link_ports]
-
-                    for host_port in dp_host_ports:
-                        actions = [switch_object.ofproto_parser.OFPActionOutput(host_port)]
-                        out = switch_object.ofproto_parser.OFPPacketOut(datapath=switch_object, buffer_id=ofproto.OFP_NO_BUFFER, in_port=switch_object.ofproto.OFPP_CONTROLLER, actions=actions, data=msg.data)
-                        switch_object.send_msg(out)
-                        pseudoflood_counter += 1
-                self.logger.info(f"arp sent to {pseudoflood_counter} ports for unknown dst")
+            elif arp_proto.opcode == arp.ARP_REPLY:
+                if dst_ip in self.host_map:
+                    final_dpid = self.host_map[dst_ip]['dpid']
+                    final_port = self.host_map[dst_ip]['port']
+                    target_datapath = self.dp_map[final_dpid]
+                    
+                    actions = [parser.OFPActionOutput(final_port)]
+                    out = parser.OFPPacketOut(datapath=target_datapath, buffer_id=ofproto.OFP_NO_BUFFER, in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=msg.data) # Send the ARP reply
+                    target_datapath.send_msg(out)
+                    self.logger.info(f"ARP Reply forwarded from {src_ip} to {dst_ip}")
 
         
         elif ipv4.ipv4 in [type(x) for x in data_packet.protocols]:
@@ -274,7 +287,7 @@ class SPRouter(app_manager.RyuApp):
                             out_port = self.host_map[dst_ip]['port']
                         
                         actions = [parser.OFPActionOutput(out_port)]
-                        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+                        if msg.buffer_id != ofproto.OFP_NO_BUFFER:
                             out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id, in_port=in_port, actions=actions)
                         else:
                             out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id, in_port=in_port, actions=actions, data=msg.data)
